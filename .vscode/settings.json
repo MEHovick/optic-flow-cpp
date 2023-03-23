@@ -6,6 +6,8 @@
         "tuple": "cpp",
         "utility": "cpp",
         "stop_token": "cpp",
-        "ostream": "cpp"
+        "ostream": "cpp",
+        "string_view": "cpp",
+        "iostream": "cpp"
     }
 }

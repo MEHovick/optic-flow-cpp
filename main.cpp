@@ -1,3 +1,4 @@
+#include <vector>
 #include <iostream>
 #include <opencv2/core.hpp>
 #include <opencv2/video.hpp>
@@ -10,30 +11,65 @@
 using namespace cv;
 using namespace std;
 
-Mat flowVizualization(Mat &flow) {
+vector<vector<bool>> magMask;
+
+pair<int, int> transformation(int x, int y, float magn, float angle) {
+    float i = x + cos(angle * 2 * CV_PI / 360.0 ) * magn,
+          j = y + sin(angle * 2 * CV_PI / 360.0 ) * magn;
+    if ((int) i < 0) i = 0;
+    else if ((int) i >= magMask.size()) i = magMask.size() - 1;
+    if ((int) j < 0) j = 0;
+    else if ((int) j >= magMask[0].size()) j = magMask[0].size() - 1;
+    return {(int) i, (int) j};
+}
+
+Mat flowVizualization(Mat &orig, Mat &flow) {
     // visualization
     Mat flow_parts[2];
     split(flow, flow_parts);
     Mat magnitude, angle, magn_norm;
     cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
     normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
-    angle *= ((1.f / 360.f) * (180.f / 255.f));
-    // build hsv image
-    Mat _hsv[3], hsv, hsv8, bgr;
-    _hsv[0] = angle;
-    _hsv[1] = Mat::ones(angle.size(), CV_32F);
-    _hsv[2] = magn_norm;
-    merge(_hsv, 3, hsv);
-    hsv.convertTo(hsv8, CV_8U, 255.0);
-    cvtColor(hsv8, bgr, COLOR_HSV2BGR);
-    return bgr;
-}
 
-Mat simpleFlow(Mat &frameOld, Mat&frame) {
-    Mat flow;
-    optflow::calcOpticalFlowSF(frameOld, frame, flow, 3, 2, 4);
+    float maxMag = 0, maxRealMag = 0;
+    for (int i = 0; i < magn_norm.rows; i++) {
+        for (int j = 0; j < magn_norm.cols; j++) {
+            maxMag = max(maxMag, magn_norm.at<float>(i, j));
+            maxRealMag = max(maxRealMag, magnitude.at<float>(i, j));
+        }
+    }
 
-    return flowVizualization(flow);
+    vector<vector<bool>> magMaskCopy(magMask.size(), vector(magMask[0].size(), false));
+
+    // Mat img = Mat(magn_norm.rows, magn_norm.cols, CV_8UC3, Scalar(0, 0, 0));
+    Mat img(orig);
+    for (int i = 0; i < magn_norm.rows; i += 1) {
+        for (int j = 0; j < magn_norm.cols; j += 1) {
+            float magn = magn_norm.at<float>(i, j);
+            float angl = angle.at<float>(i, j);
+            Vec3b &org = img.at<Vec3b>(i, j);
+            if (maxMag - magn < 0.70 || (magMask[i][j] && maxMag - magn < 0.99)) {
+                Point start(j, i), backend(j + cos(angl * 2 * CV_PI / 360.0 ) * 20 * magn,
+                                       i + sin(angl * 2 * CV_PI / 360.0 ) * 20 * magn);
+                // line(img, start, start, Scalar(0, 255, 0), 2);
+                org[0] *= 0.7; org[1] *= 0.7; org[2] = org[2] * 0.7 + 255 * 0.3;
+                magMask[i][j] = true;
+                pair<int,int> tr(transformation(i, j, magn, angl));
+                magMaskCopy[tr.first][tr.second] = true;
+            }
+        }
+    }
+    magMask = magMaskCopy;
+    return img;
+
+    // angle *= ((1.f / 360.f) * (180.f / 255.f));
+    // // build hsv image
+    // Mat _hsv[3], hsv, hsv8, bgr;
+    // _hsv[0] = angle;
+    // _hsv[1] = Mat::ones(angle.size(), CV_32F);
+    // _hsv[2] = magn_norm;
+    // merge(_hsv, 3, hsv);
+    // hsv.convertTo(hsv8, magMaskCopyion(frame, flow);
 }
 
 Mat FarnebackFlow(Mat &frameOld, Mat &frame) {
@@ -44,14 +80,14 @@ Mat FarnebackFlow(Mat &frameOld, Mat &frame) {
     Mat flow;
     calcOpticalFlowFarneback(prvs, next, flow, 0.5, 3, 15, 3, 5, 1.2, 0);
     
-    return flowVizualization(flow);
+    return flowVizualization(frame, flow);
 }
 
 Mat LucasKanadeFlow(Mat &frameOld, Mat &frame) {
     Mat flow;
     optflow::calcOpticalFlowSparseToDense(frameOld, frame, flow);
 
-    return flowVizualization(flow);
+    return flowVizualization(frame, flow);
 }
 
 Mat RobustLocalFlow(Mat &frameOld, Mat &frame) {
@@ -60,7 +96,7 @@ Mat RobustLocalFlow(Mat &frameOld, Mat &frame) {
                                         Size(6,6), cv::optflow::InterpolationType::INTERP_EPIC,
                                         128, 0.05f, 1000.0f, 5, 100, true, 500.0f, 1.5f, false);
  
-    return flowVizualization(flow);
+    return flowVizualization(frame, flow);
 }
 
 Mat DualTVL1Flow(Mat &frameOld, Mat &frame) {
@@ -194,15 +230,17 @@ int main() {
         cap >> frame;
         if (frame.empty()) break;
         if (frameNum) {
-            res.write(DualTVL1Flow(frameOld, frame));
+            res.write(RobustLocalFlow(frameOld, frame));
             // imshow("text", DualTVL1Flow(frameOld, frame));
             // waitKey();
+        } else {
+            magMask = vector(frame.rows, vector(frame.cols, false));
         }
         frameOld = frame;
         frameNum++;
 
         cout << frameNum << endl;
-        if (frameNum == 100) break;
+        if (frameNum == 150) break;
     }
     cap.release();
     res.release();
