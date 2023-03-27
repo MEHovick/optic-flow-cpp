@@ -47,7 +47,7 @@ Mat flowVizualization(Mat &orig, Mat &flow) {
             float mg_orig = magnitude.at<float>(i, j);
             float angl = angle.at<float>(i, j);
             Vec3b &org = img.at<Vec3b>(i, j);
-            if (maxMag - mg_norm < 0.70 || (magMask[i][j] && maxMag - mg_norm < 0.99)) {
+            if (maxMag - mg_norm < 0.70 || (magMask[i][j] && maxMag - mg_norm < 0.95)) {
                 // Point start(j, i), backend(j + cos(angl * 2 * CV_PI / 360.0 ) * 20 * mg_norm,
                 //                        i + sin(angl * 2 * CV_PI / 360.0 ) * 20 * mg_norm);
                 // line(img, start, start, Scalar(0, 255, 0), 2);
@@ -99,112 +99,15 @@ Mat RobustLocalFlow(Mat &frameOld, Mat &frame) {
 }
 
 Mat DualTVL1Flow(Mat &frameOld, Mat &frame) {
+    Mat_<Point2f> flow;
+    Ptr<optflow::DualTVL1OpticalFlow> tvl1 = optflow::DualTVL1OpticalFlow::create();
+
     Mat prvs, next;
     cvtColor(frameOld, prvs, COLOR_BGR2GRAY);
     cvtColor(frame, next, COLOR_BGR2GRAY);
 
-    Mat_<Point2f> flow;
-    Ptr<optflow::DualTVL1OpticalFlow> tvl1 = optflow::DualTVL1OpticalFlow::create();
     tvl1->calc(prvs, next, flow);
-
-    Mat dst; float maxmotion = -1;
-    dst.create(flow.size(), CV_8UC3);
-    dst.setTo(Scalar::all(0));
-
-    float maxrad = maxmotion;
-
-    if (maxmotion <= 0)
-    {
-        maxrad = 1;
-        for (int y = 0; y < flow.rows; ++y)
-        {
-            for (int x = 0; x < flow.cols; ++x)
-            {
-                Point2f u = flow(y, x);
-
-                if (!cvIsNaN(u.x) && !cvIsNaN(u.y) && fabs(u.x) < 1e9 && fabs(u.y) < 1e9)
-                    continue;
-
-                maxrad = max(maxrad, sqrt(u.x * u.x + u.y * u.y));
-            }
-        }
-    }
-
-    for (int y = 0; y < flow.rows; ++y)
-    {
-        for (int x = 0; x < flow.cols; ++x)
-        {
-            Point2f u = flow(y, x);
-
-            if (!cvIsNaN(u.x) && !cvIsNaN(u.y) && fabs(u.x) < 1e9 && fabs(u.y) < 1e9) {
-                float fx = u.x / maxrad, fy = u.y / maxrad;
-
-                    static bool first = true;
-
-                    const int RY = 15;
-                    const int YG = 6;
-                    const int GC = 4;
-                    const int CB = 11;
-                    const int BM = 13;
-                    const int MR = 6;
-                    const int NCOLS = RY + YG + GC + CB + BM + MR;
-                    static Vec3i colorWheel[NCOLS];
-
-                    if (first)
-                    {
-                        int k = 0;
-
-                        for (int i = 0; i < RY; ++i, ++k)
-                            colorWheel[k] = Vec3i(255, 255 * i / RY, 0);
-
-                        for (int i = 0; i < YG; ++i, ++k)
-                            colorWheel[k] = Vec3i(255 - 255 * i / YG, 255, 0);
-
-                        for (int i = 0; i < GC; ++i, ++k)
-                            colorWheel[k] = Vec3i(0, 255, 255 * i / GC);
-
-                        for (int i = 0; i < CB; ++i, ++k)
-                            colorWheel[k] = Vec3i(0, 255 - 255 * i / CB, 255);
-
-                        for (int i = 0; i < BM; ++i, ++k)
-                            colorWheel[k] = Vec3i(255 * i / BM, 0, 255);
-
-                        for (int i = 0; i < MR; ++i, ++k)
-                            colorWheel[k] = Vec3i(255, 0, 255 - 255 * i / MR);
-
-                        first = false;
-                    }
-
-                    const float rad = sqrt(fx * fx + fy * fy);
-                    const float a = atan2(-fy, -fx) / (float)CV_PI;
-
-                    const float fk = (a + 1.0f) / 2.0f * (NCOLS - 1);
-                    const int k0 = static_cast<int>(fk);
-                    const int k1 = (k0 + 1) % NCOLS;
-                    const float f = fk - k0;
-
-                    Vec3b pix;
-
-                    for (int b = 0; b < 3; b++)
-                    {
-                        const float col0 = colorWheel[k0][b] / 255.f;
-                        const float col1 = colorWheel[k1][b] / 255.f;
-
-                        float col = (1 - f) * col0 + f * col1;
-
-                        if (rad <= 1)
-                            col = 1 - rad * (1 - col);
-                        else
-                            col *= .75;
-
-                        pix[2 - b] = static_cast<uchar>(255.f * col);
-                    }
-
-                dst.at<Vec3b>(y, x) = pix;
-            }
-        }
-    }
-    return dst;
+    return flowVizualization(frame, flow);
 }
 
 Mat HornSchunckFlow(Mat &frameOld, Mat &frame) {
