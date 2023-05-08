@@ -1,5 +1,6 @@
 #include <vector>
 #include <iostream>
+#include <opencv2/opencv.hpp>
 #include <opencv2/core.hpp>
 #include <opencv2/video.hpp>
 #include <opencv2/videoio.hpp>
@@ -13,52 +14,115 @@ using namespace std;
 
 vector<vector<bool>> magMask;
 
-pair<int, int> transformation(int x, int y, float magn, float angle) {
-    int i = x + sin(angle * 2 * CV_PI / 360.0 ) * magn,
-        j = y + cos(angle * 2 * CV_PI / 360.0 ) * magn;
-    if (i < 0) i = 0;
-    else if (i >= magMask.size()) i = magMask.size() - 1;
-    if (j < 0) j = 0;
-    else if (j >= magMask[0].size()) j = magMask[0].size() - 1;
+double diceCoefficient(Mat &mask1, Mat &mask2) {
+	double intersectionArea = 0, mask1Area = 0, mask2Area = 0;
+    for (int i = 0; i < mask1.rows; i += 1) {
+        for (int j = 0; j < mask1.cols; j += 1) {
+			uchar &msk1 = mask1.at<uchar>(i, j);
+			uchar &msk2 = mask2.at<uchar>(i, j);
+			if (msk1 > 128 && msk2 == 255) intersectionArea++;
+			if (msk1 > 128) mask1Area++;
+			if (msk2 == 255) mask2Area++;
+		}
+	}
+
+    double dice = (2 * intersectionArea) / (mask1Area + mask2Area);
+    return dice;
+}
+
+pair<int, int> transformation(int y, int x, float magn, float angle) {
+    int i = y + sin(angle * 2 * CV_PI / 360.0 ) * magn,
+        j = x + cos(angle * 2 * CV_PI / 360.0 ) * magn;
+	i = min(max(i, 0), (int)magMask.size() - 1);
+	j = min(max(j, 0), (int)magMask[0].size() - 1);
     return { i, j };
 }
 
-Mat flowVizualization(Mat &orig, Mat &flow) {
-    Mat flow_parts[2];
-    split(flow, flow_parts);
-    Mat magnitude, angle, magn_norm;
-    cartToPolar(flow_parts[0], flow_parts[1], magnitude, angle, true);
-    normalize(magnitude, magn_norm, 0.0f, 1.0f, NORM_MINMAX);
+Mat flowVizualization(Mat &orig, Mat &flow, Mat &mask) {
 
-    vector<vector<bool>> magMaskCopy(magMask.size(), vector(magMask[0].size(), false));
+	GaussianBlur(flow, flow, Size(5, 5), 0);
 
-    float maxMag = 0, maxRealMag = 0;
-    for (int i = 0; i < magn_norm.rows; i++) {
-        for (int j = 0; j < magn_norm.cols; j++) {
-            maxMag = max(maxMag, magn_norm.at<float>(i, j));
-            maxRealMag = max(maxRealMag, magnitude.at<float>(i, j));
+	Mat flow_magnitude, angle;
+    vector<Mat> flow_channels;
+    split(flow, flow_channels);
+    cartToPolar(flow_channels[0], flow_channels[1], flow_magnitude, angle, true);
+
+    Mat flow_magnitude_1d = flow_magnitude.reshape(1, 1);
+    Mat labels, centers;
+    kmeans(flow_magnitude_1d, 2, labels, TermCriteria(TermCriteria::EPS + TermCriteria::MAX_ITER, 10, 1.0), 3, KMEANS_PP_CENTERS, centers);
+
+    float thresh = (centers.at<float>(0) + centers.at<float>(1)) / 2;
+
+    Mat flow_thresh;
+    threshold(flow_magnitude, flow_thresh, thresh, 1, THRESH_BINARY);
+
+	Mat img(orig);
+	vector<vector<bool>> magMaskCopy(magMask.size(), vector(magMask[0].size(), false));
+	
+	vector<vector<int>> result(orig.rows, vector<int>(orig.cols, 0));
+
+
+	for (int i = 0; i < orig.rows; i += 1) {
+        for (int j = 0; j < orig.cols; j += 1) {
+			Vec3b &org = img.at<Vec3b>(i, j);
+			float &ang = angle.at<float>(i, j);
+			float &thr = flow_thresh.at<float>(i, j);
+			float &mag = flow_magnitude.at<float>(i, j);
+			if (thr > 0 || (magMask[i][j] && mag > thresh / 8)) {
+				result[i][j] = 1;
+            }
         }
     }
 
-    Mat img(orig);
-    for (int i = 0; i < magn_norm.rows; i += 1) {
-        for (int j = 0; j < magn_norm.cols; j += 1) {
-            float mg_norm = magn_norm.at<float>(i, j);
-            float mg_orig = magnitude.at<float>(i, j);
-            float angl = angle.at<float>(i, j);
-            Vec3b &org = img.at<Vec3b>(i, j);
-            if (maxMag - mg_norm < 0.70 || (magMask[i][j] && maxMag - mg_norm < 0.95)) {
-                // Point start(j, i), backend(j + cos(angl * 2 * CV_PI / 360.0 ) * 20 * mg_norm,
-                //                        i + sin(angl * 2 * CV_PI / 360.0 ) * 20 * mg_norm);
-                // line(img, start, start, Scalar(0, 255, 0), 2);
+	vector<vector<int>> lf(orig.rows, vector<int>(orig.cols, 0));
+	vector<vector<int>> up(orig.rows, vector<int>(orig.cols, 0));
+
+	for (int i = 0; i < orig.rows; ++i) lf[i][0] = result[i][0];
+	for (int j = 0; j < orig.cols; ++j) up[0][j] = result[0][j];
+
+	for (int i = 0; i < orig.rows; ++i) {
+        for (int j = 1; j < orig.cols; ++j) {
+			lf[i][j] = result[i][j] + lf[i][j - 1];
+		}
+	}
+	for (int j = 0; j < orig.cols; ++j) {
+		for (int i = 1; i < orig.rows; ++i) {
+			up[i][j] = result[i][j] + up[i - 1][j];
+		}
+	}
+
+	for (int i = 0; i < orig.rows; i += 1) {
+        for (int j = 0; j < orig.cols; j += 1) {
+			if (!result[i][j]) {
+				int t = 0;
+				int l = max(j - 50, 0), r = min(j + 50, orig.cols - 1),
+					u = max(i - 50, 0), d = min(i + 50, orig.rows - 1);
+				if (lf[i][j] - lf[i][l] != 0) t++;
+				if (lf[i][j] - lf[i][r] != 0) t++;
+				if (lf[i][j] - lf[u][j] != 0) t++;
+				if (lf[i][j] - lf[d][j] != 0) t++;
+				if (t >= 4) result[i][j] = true;
+			} 
+		}
+	}
+
+	for (int i = 0; i < orig.rows; i += 1) {
+        for (int j = 0; j < orig.cols; j += 1) {
+			uchar &msk = mask.at<uchar>(i, j);
+			Vec3b &org = img.at<Vec3b>(i, j);
+			float &ang = angle.at<float>(i, j);
+			float &mag = flow_magnitude.at<float>(i, j);
+			if (result[i][j]) {
+				msk = 255;
                 org[0] *= 0.7; org[1] *= 0.7; org[2] = org[2] * 0.7 + 255 * 0.3;
-                pair<int,int> tr(transformation(i, j, mg_orig, angl));
+                pair<int,int> tr(transformation(i, j, mag, ang));
                 magMaskCopy[tr.first][tr.second] = true;
             }
         }
     }
-    magMask = magMaskCopy;
-    return img;
+
+	magMask = magMaskCopy;
+	return img;
 
     // angle *= ((1.f / 360.f) * (180.f / 255.f));
     // Mat _hsv[3], hsv, hsv8, bgr;
@@ -71,34 +135,34 @@ Mat flowVizualization(Mat &orig, Mat &flow) {
     // return bgr;
 }
 
-Mat FarnebackFlow(Mat &frameOld, Mat &frame) {
+Mat FarnebackFlow(Mat &frameOld, Mat &frame, Mat &mask) {
     Mat prvs, next;
     cvtColor(frameOld, prvs, COLOR_BGR2GRAY);
     cvtColor(frame, next, COLOR_BGR2GRAY);
 
     Mat flow;
-    calcOpticalFlowFarneback(prvs, next, flow, 0.5, 3, 15, 3, 5, 1.2, 0);
+    calcOpticalFlowFarneback(prvs, next, flow, 0.9, 10, 30, 20, 5, 1.2, 0);
     
-    return flowVizualization(frame, flow);
+    return flowVizualization(frame, flow, mask);
 }
 
-Mat LucasKanadeFlow(Mat &frameOld, Mat &frame) {
+Mat LucasKanadeFlow(Mat &frameOld, Mat &frame, Mat &mask) {
     Mat flow;
     optflow::calcOpticalFlowSparseToDense(frameOld, frame, flow);
 
-    return flowVizualization(frame, flow);
+    return flowVizualization(frame, flow, mask);
 }
 
-Mat RobustLocalFlow(Mat &frameOld, Mat &frame) {
+Mat RobustLocalFlow(Mat &frameOld, Mat &frame, Mat &mask) {
     Mat flow;
     optflow::calcOpticalFlowDenseRLOF(frameOld, frame, flow, Ptr<optflow::RLOFOpticalFlowParameter>(), 0.5f,
-                                        Size(6,6), cv::optflow::InterpolationType::INTERP_EPIC,
+                                        Size(4,4), cv::optflow::InterpolationType::INTERP_EPIC,
                                         128, 0.05f, 1000.0f, 5, 100, true, 500.0f, 1.5f, false);
  
-    return flowVizualization(frame, flow);
+    return flowVizualization(frame, flow, mask);
 }
 
-Mat DualTVL1Flow(Mat &frameOld, Mat &frame) {
+Mat DualTVL1Flow(Mat &frameOld, Mat &frame, Mat &mask) {
     Mat_<Point2f> flow;
     Ptr<optflow::DualTVL1OpticalFlow> tvl1 = optflow::DualTVL1OpticalFlow::create();
 
@@ -107,7 +171,19 @@ Mat DualTVL1Flow(Mat &frameOld, Mat &frame) {
     cvtColor(frame, next, COLOR_BGR2GRAY);
 
     tvl1->calc(prvs, next, flow);
-    return flowVizualization(frame, flow);
+    return flowVizualization(frame, flow, mask);
+}
+
+Mat DeepFlow(Mat &frameOld, Mat &frame, Mat &mask) {
+	Mat flow;
+	Ptr<DenseOpticalFlow> algo = optflow::createOptFlow_DeepFlow();
+
+	Mat prvs, next;
+    cvtColor(frameOld, prvs, COLOR_BGR2GRAY);
+    cvtColor(frame, next, COLOR_BGR2GRAY);
+
+	algo->calc(prvs, next, flow);
+	return flowVizualization(frame, flow, mask);
 }
 
 Mat HornSchunckFlow(Mat &frameOld, Mat &frame) {
@@ -290,12 +366,14 @@ Mat HornSchunckFlow(Mat &frameOld, Mat &frame) {
 	cv::merge(channels, img);
 
     img.convertTo(img, CV_8U, 255.0);
+	bitwise_not(img, img);
     return img;
 }
 
 int main() {
-    VideoCapture cap("video/orig.mp4");
-    VideoWriter res("video/test.mp4", VideoWriter::fourcc('m','p','4','v'),
+    VideoCapture cap("video/31.mp4");
+	VideoCapture capMask("video/31Mask.mp4");
+    VideoWriter res("video/test2.mp4", VideoWriter::fourcc('m','p','4','v'),
                     cap.get(CAP_PROP_FPS), Size(cap.get(CAP_PROP_FRAME_WIDTH),
                                                 cap.get(CAP_PROP_FRAME_HEIGHT)));
     if(!cap.isOpened()){
@@ -305,23 +383,31 @@ int main() {
 
     Mat frameOld;
     int frameNum = 0;
+	double dice = 0;
     while(true) {
-        Mat frame;
+        Mat frame, frame_mask;
         cap >> frame;
+		capMask >> frame_mask;
+		cvtColor(frame_mask, frame_mask, COLOR_BGR2GRAY);
         if (frame.empty()) break;
         if (frameNum) {
-            res.write(RobustLocalFlow(frameOld, frame));
-            // imshow("text", DualTVL1Flow(frameOld, frame));
+			Mat mask = Mat::zeros(frame.rows, frame.cols, CV_8U);
+            res.write(RobustLocalFlow(frameOld, frame, mask));
+			cout << diceCoefficient(frame_mask, mask) << ' ';
+			dice += diceCoefficient(frame_mask, mask);
+            // imshow("text", RobustLocalFlow(frameOld, frame));
             // waitKey();
         } else {
             magMask = vector(frame.rows, vector(frame.cols, false));
         }
         frameOld = frame;
-        frameNum++;
 
         cout << frameNum << endl;
-        if (frameNum == 150) break;
+        if (frameNum == 50) break;
+
+		frameNum++;
     }
+	cout << "Result Dice: " << dice / frameNum;
     cap.release();
     res.release();
 }

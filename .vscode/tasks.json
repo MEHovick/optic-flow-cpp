@@ -10,7 +10,8 @@
                 "${file}",
                 "-o",
                 "${fileDirname}/${fileBasenameNoExtension}",
-                "`pkg-config --cflags --libs opencv4`"
+                "`pkg-config --cflags --libs opencv4`",
+                "-O3"
             ],
             "options": {
                 "cwd": "${fileDirname}"

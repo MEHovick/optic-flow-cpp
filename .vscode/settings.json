@@ -8,6 +8,7 @@
         "stop_token": "cpp",
         "ostream": "cpp",
         "string_view": "cpp",
-        "iostream": "cpp"
+        "iostream": "cpp",
+        "numbers": "cpp"
     }
 }
