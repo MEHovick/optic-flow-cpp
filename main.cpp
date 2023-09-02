@@ -159,7 +159,7 @@ Mat LucasKanadeFlow(Mat &frameOld, Mat &frame, Mat &mask) {
 Mat RobustLocalFlow(Mat &frameOld, Mat &frame, Mat &mask) {
     Mat flow;
     optflow::calcOpticalFlowDenseRLOF(frameOld, frame, flow, Ptr<optflow::RLOFOpticalFlowParameter>(), 0.5f,
-                                        Size(4,4), cv::optflow::InterpolationType::INTERP_EPIC,
+                                        Size(6,6), cv::optflow::InterpolationType::INTERP_EPIC,
                                         128, 0.05f, 1000.0f, 5, 100, true, 500.0f, 1.5f, false);
  
     return flowVizualization(frame, flow, mask);
@@ -252,9 +252,9 @@ Mat HornSchunckFlow(Mat &frameOld, Mat &frame, Mat &mask) {
 }
 
 int main() {
-    VideoCapture cap("video/orig.mp4");
-	// VideoCapture capMask("video/31Mask.mp4");
-    VideoWriter res("video/test1.mp4", VideoWriter::fourcc('m','p','4','v'),
+    VideoCapture cap("video/blender/Videos/31.mp4");
+	VideoCapture capMask("video/blender/Mask/31Mask.mp4");
+    VideoWriter res("video/result.mp4", VideoWriter::fourcc('m','p','4','v'),
                     cap.get(CAP_PROP_FPS), Size(cap.get(CAP_PROP_FRAME_WIDTH),
                                                 cap.get(CAP_PROP_FRAME_HEIGHT)));
     if(!cap.isOpened()){
@@ -268,27 +268,26 @@ int main() {
     while(true) {
         Mat frame, frame_mask;
         cap >> frame;
-		// capMask >> frame_mask;
-		// cvtColor(frame_mask, frame_mask, COLOR_BGR2GRAY);
+		capMask >> frame_mask;
+		cvtColor(frame_mask, frame_mask, COLOR_BGR2GRAY);
         if (frame.empty()) break;
         if (frameNum) {
 			Mat mask = Mat::zeros(frame.rows, frame.cols, CV_8U);
-            res.write(HornSchunckFlow(frameOld, frame, mask));
-			// cout << diceCoefficient(frame_mask, mask) << ' ';
-			// dice += diceCoefficient(frame_mask, mask);
-            // imshow("text", HornSchunckFlow(frameOld, frame, mask));
-            // waitKey();
+            res.write(RobustLocalFlow(frameOld, frame, mask));
+			cout << diceCoefficient(frame_mask, mask) << ' ';
+			dice += diceCoefficient(frame_mask, mask);
         } else {
             magMask = vector(frame.rows, vector(frame.cols, false));
         }
         frameOld = frame;
 
         cout << frameNum << endl;
-        if (frameNum == 50) break;
+        if (frameNum == 150) break;
 
 		frameNum++;
     }
 	cout << "Result Dice: " << dice / frameNum;
     cap.release();
+	capMask.release();
     res.release();
 }
